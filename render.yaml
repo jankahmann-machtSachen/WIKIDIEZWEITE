@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: editwar-scanner
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.0"
+      - key: CRON_SECRET
+        generateValue: true
+    disk:
+      name: data
+      mountPath: /var/data
+      sizeGB: 1
