@@ -27,5 +27,6 @@ SCORE_WEIGHTS = {
 MIN_EDITS_FOR_ANALYSIS = 5
 REVERT_KEYWORDS = ['revert', 'rv', 'undid', 'undo', 'zurückgesetzt', 'rückgängig']
 
-# Datenbank - Im Projektordner speichern (Quick-Fix für Free Tier)
-DATABASE_PATH = '/opt/render/project/src/data/editwars.db'
+# Turso Datenbank
+TURSO_DATABASE_URL = os.environ.get('TURSO_DATABASE_URL', '')
+TURSO_AUTH_TOKEN = os.environ.get('TURSO_AUTH_TOKEN', '')
