@@ -1,10 +1,11 @@
 """
 Flask Web-Interface für den Wikipedia Edit-War Scanner
+Mit Turso-Datenbank und Update-Logik
 """
 
 import os
 from flask import Flask, render_template_string, request, Response, redirect, url_for
-from database import init_database, add_article, get_all_articles, get_scan_history, delete_article, log_scan
+from database import init_database, add_or_update_article, get_all_articles, get_scan_history, delete_article, log_scan
 from scanner import get_recent_changes, search_article
 from analyzer import analyze_article
 from exporter import export_to_excel_compatible_csv
@@ -111,6 +112,15 @@ HTML_TEMPLATE = '''
         .stat-label { font-size: 12px; color: #666; }
         a { color: #0066cc; }
         .loading { opacity: 0.6; pointer-events: none; }
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 11px;
+            margin-left: 5px;
+        }
+        .badge-new { background: #d4edda; color: #155724; }
+        .badge-updated { background: #fff3cd; color: #856404; }
     </style>
 </head>
 <body>
@@ -149,7 +159,7 @@ HTML_TEMPLATE = '''
             </select>
             <button type="submit" class="btn">Scan starten ({{ scan_limit }} Artikel)</button>
         </form>
-        <p><small>⚠️ Der Scan kann 1-2 Minuten dauern.</small></p>
+        <p><small>⚠️ Der Scan kann 1-2 Minuten dauern. Bestehende Artikel werden bei Änderungen aktualisiert.</small></p>
     </div>
     
     <div class="card">
@@ -180,7 +190,7 @@ HTML_TEMPLATE = '''
                     <th>Reverts</th>
                     <th>Editoren</th>
                     <th>Konflikt-Score</th>
-                    <th>Gefunden</th>
+                    <th>Zuletzt aktualisiert</th>
                     <th></th>
                 </tr>
             </thead>
@@ -198,7 +208,7 @@ HTML_TEMPLATE = '''
                             {{ article.conflict_score }}/10
                         </span>
                     </td>
-                    <td>{{ article.first_seen[:10] }}</td>
+                    <td>{{ article.last_updated[:16] }}</td>
                     <td>
                         <form method="post" action="/delete/{{ article.id }}" style="display:inline;">
                             <button type="submit" class="btn btn-danger" style="padding:5px 10px;">🗑️</button>
@@ -223,7 +233,8 @@ HTML_TEMPLATE = '''
                     <th>Typ</th>
                     <th>Wiki</th>
                     <th>Gescannt</th>
-                    <th>Neu hinzugefügt</th>
+                    <th>Neu</th>
+                    <th>Aktualisiert</th>
                 </tr>
             </thead>
             <tbody>
@@ -234,6 +245,7 @@ HTML_TEMPLATE = '''
                     <td>{{ scan.wiki_lang|upper if scan.wiki_lang else '-' }}</td>
                     <td>{{ scan.articles_scanned }}</td>
                     <td>{{ scan.articles_added }}</td>
+                    <td>{{ scan.articles_updated }}</td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -291,6 +303,7 @@ def run_scan():
     languages = ['de', 'en'] if wiki_lang == 'both' else [wiki_lang]
     total_scanned = 0
     total_added = 0
+    total_updated = 0
     
     for lang in languages:
         articles_per_lang = SCAN_LIMIT // len(languages)
@@ -298,6 +311,7 @@ def run_scan():
         
         scanned = 0
         added = 0
+        updated = 0
         
         for title, edit_data in active_articles:
             scanned += 1
@@ -305,16 +319,20 @@ def run_scan():
             analysis = analyze_article(lang, title, edit_data)
             
             if analysis and analysis['conflict_score'] >= 3:
-                if add_article(analysis):
+                result = add_or_update_article(analysis)
+                if result == 'added':
                     added += 1
+                elif result == 'updated':
+                    updated += 1
             
             time.sleep(0.3)
         
-        log_scan('manual', lang, scanned, added)
+        log_scan('manual', lang, scanned, added, updated)
         total_scanned += scanned
         total_added += added
+        total_updated += updated
     
-    message = f"Scan abgeschlossen: {total_scanned} Artikel gescannt, {total_added} neue hinzugefügt."
+    message = f"Scan abgeschlossen: {total_scanned} Artikel gescannt, {total_added} neue, {total_updated} aktualisiert."
     return redirect(url_for('index', message=message, type='success'))
 
 
@@ -333,6 +351,7 @@ def search():
         return redirect(url_for('index', message=f'Keine Artikel gefunden für "{search_term}".', type='error'))
     
     added = 0
+    updated = 0
     analyzed = 0
     
     for title in results[:5]:
@@ -340,14 +359,17 @@ def search():
         analyzed += 1
         
         if analysis:
-            if add_article(analysis):
+            result = add_or_update_article(analysis)
+            if result == 'added':
                 added += 1
+            elif result == 'updated':
+                updated += 1
         
         time.sleep(0.3)
     
-    log_scan('search', wiki_lang, analyzed, added)
+    log_scan('search', wiki_lang, analyzed, added, updated)
     
-    message = f'Suche abgeschlossen: {analyzed} Artikel analysiert, {added} neue hinzugefügt.'
+    message = f'Suche abgeschlossen: {analyzed} Artikel analysiert, {added} neue, {updated} aktualisiert.'
     return redirect(url_for('index', message=message, type='success'))
 
 
@@ -377,7 +399,6 @@ def delete(article_id):
 @app.route('/cron/scan')
 def cron_scan():
     """Wird vom Render Cron-Job aufgerufen."""
-    # Einfache Authentifizierung über Secret
     secret = request.args.get('secret')
     expected_secret = os.environ.get('CRON_SECRET', 'default-secret')
     
@@ -386,25 +407,32 @@ def cron_scan():
     
     init_database()
     total_added = 0
+    total_updated = 0
     
     for lang in ['de', 'en']:
         articles_per_lang = SCAN_LIMIT // 2
         active_articles = get_recent_changes(lang, limit=articles_per_lang)
         
         added = 0
+        updated = 0
+        
         for title, edit_data in active_articles:
             analysis = analyze_article(lang, title, edit_data)
             
             if analysis and analysis['conflict_score'] >= 3:
-                if add_article(analysis):
+                result = add_or_update_article(analysis)
+                if result == 'added':
                     added += 1
+                elif result == 'updated':
+                    updated += 1
             
             time.sleep(0.3)
         
-        log_scan('scheduled', lang, len(active_articles), added)
+        log_scan('scheduled', lang, len(active_articles), added, updated)
         total_added += added
+        total_updated += updated
     
-    return f'Scan completed. {total_added} articles added.', 200
+    return f'Scan completed. {total_added} added, {total_updated} updated.', 200
 
 
 if __name__ == '__main__':
