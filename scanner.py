@@ -97,7 +97,7 @@ def get_article_details(wiki_lang, title):
         'titles': title,
         'prop': 'revisions|info|categories',
         'rvprop': 'user|comment|timestamp',
-        'rvlimit': 100,
+        'rvlimit': 500,
         'inprop': 'protection',
         'format': 'json'
     }
