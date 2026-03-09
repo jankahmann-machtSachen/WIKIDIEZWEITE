@@ -210,10 +210,3 @@ def delete_article(article_id):
                 [{"type": "integer", "value": str(article_id)}])
 ```
 
----
-
-**Und ändere `requirements.txt`** – wir brauchen `libsql-client` nicht mehr:
-```
-flask==3.0.0
-requests==2.31.0
-gunicorn==21.2.0
