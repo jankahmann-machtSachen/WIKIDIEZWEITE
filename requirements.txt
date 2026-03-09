@@ -1,4 +1,4 @@
 flask==3.0.0
 requests==2.31.0
 gunicorn==21.2.0
-libsql-experimental==0.0.47
+libsql-client==0.3.0
