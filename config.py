@@ -27,8 +27,5 @@ SCORE_WEIGHTS = {
 MIN_EDITS_FOR_ANALYSIS = 5
 REVERT_KEYWORDS = ['revert', 'rv', 'undid', 'undo', 'zurückgesetzt', 'rückgängig']
 
-# Datenbank - Render nutzt /var/data für persistente Speicherung
-if os.environ.get('RENDER'):
-    DATABASE_PATH = '/var/data/editwars.db'
-else:
-    DATABASE_PATH = 'data/editwars.db'
+# Datenbank - Im Projektordner speichern (Quick-Fix für Free Tier)
+DATABASE_PATH = '/opt/render/project/src/data/editwars.db'
