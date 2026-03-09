@@ -1,28 +1,24 @@
 """
 Datenbank-Operationen für den Edit-War Scanner
+Mit Turso (Cloud SQLite) und Update-Logik
 """
 
-import sqlite3
-import os
+import libsql_experimental as libsql
 from datetime import datetime
-from config import DATABASE_PATH
+from config import TURSO_DATABASE_URL, TURSO_AUTH_TOKEN
 
 
-def get_db_path():
-    """Gibt den Pfad zur Datenbank zurück."""
-    return DATABASE_PATH
+def get_connection():
+    """Erstellt eine Verbindung zur Turso-Datenbank."""
+    return libsql.connect(
+        database=TURSO_DATABASE_URL,
+        auth_token=TURSO_AUTH_TOKEN
+    )
 
 
 def init_database():
-    """Erstellt die Datenbank und Tabellen, falls nicht vorhanden."""
-    db_path = get_db_path()
-    
-    # Ordner erstellen falls nötig
-    db_dir = os.path.dirname(db_path)
-    if db_dir:
-        os.makedirs(db_dir, exist_ok=True)
-    
-    conn = sqlite3.connect(db_path)
+    """Erstellt die Tabellen, falls nicht vorhanden."""
+    conn = get_connection()
     cursor = conn.cursor()
     
     cursor.execute('''
@@ -49,6 +45,7 @@ def init_database():
             wiki_lang TEXT,
             articles_scanned INTEGER,
             articles_added INTEGER,
+            articles_updated INTEGER DEFAULT 0,
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
@@ -57,54 +54,112 @@ def init_database():
     conn.close()
 
 
-def article_exists(title, wiki_lang):
-    """Prüft, ob ein Artikel bereits in der Datenbank ist."""
-    conn = sqlite3.connect(get_db_path())
+def get_article(title, wiki_lang):
+    """Holt einen Artikel aus der Datenbank, falls vorhanden."""
+    conn = get_connection()
     cursor = conn.cursor()
     
     cursor.execute(
-        'SELECT id FROM articles WHERE title = ? AND wiki_lang = ?',
+        'SELECT * FROM articles WHERE title = ? AND wiki_lang = ?',
         (title, wiki_lang)
     )
-    result = cursor.fetchone()
+    row = cursor.fetchone()
     conn.close()
     
-    return result is not None
+    if row:
+        columns = ['id', 'title', 'wiki_lang', 'url', 'topic', 
+                   'revision_count', 'revert_count', 'editor_count',
+                   'conflict_score', 'first_seen', 'last_updated']
+        return dict(zip(columns, row))
+    return None
 
 
-def add_article(article_data):
-    """Fügt einen Artikel zur Datenbank hinzu."""
-    if article_exists(article_data['title'], article_data['wiki_lang']):
-        return False
+def article_needs_update(existing, new_data):
+    """
+    Prüft, ob ein Artikel aktualisiert werden muss.
+    Update wenn: Edits ODER Reverts ODER Editoren sich geändert haben.
+    """
+    if existing is None:
+        return True  # Neuer Artikel
     
-    conn = sqlite3.connect(get_db_path())
+    return (
+        existing['revision_count'] != new_data['revision_count'] or
+        existing['revert_count'] != new_data['revert_count'] or
+        existing['editor_count'] != new_data['editor_count']
+    )
+
+
+def add_or_update_article(article_data):
+    """
+    Fügt einen Artikel hinzu oder aktualisiert ihn.
+    
+    Returns:
+        'added' - Neuer Artikel wurde hinzugefügt
+        'updated' - Bestehender Artikel wurde aktualisiert
+        'unchanged' - Keine Änderung nötig
+    """
+    existing = get_article(article_data['title'], article_data['wiki_lang'])
+    
+    if not article_needs_update(existing, article_data):
+        return 'unchanged'
+    
+    conn = get_connection()
     cursor = conn.cursor()
+    now = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
     
-    cursor.execute('''
-        INSERT INTO articles 
-        (title, wiki_lang, url, topic, revision_count, revert_count, 
-         editor_count, conflict_score)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (
-        article_data['title'],
-        article_data['wiki_lang'],
-        article_data['url'],
-        article_data.get('topic', ''),
-        article_data['revision_count'],
-        article_data['revert_count'],
-        article_data['editor_count'],
-        article_data['conflict_score']
-    ))
-    
-    conn.commit()
-    conn.close()
-    return True
+    if existing is None:
+        # Neuer Artikel
+        cursor.execute('''
+            INSERT INTO articles 
+            (title, wiki_lang, url, topic, revision_count, revert_count, 
+             editor_count, conflict_score, first_seen, last_updated)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            article_data['title'],
+            article_data['wiki_lang'],
+            article_data['url'],
+            article_data.get('topic', ''),
+            article_data['revision_count'],
+            article_data['revert_count'],
+            article_data['editor_count'],
+            article_data['conflict_score'],
+            now,
+            now
+        ))
+        conn.commit()
+        conn.close()
+        return 'added'
+    else:
+        # Artikel aktualisieren
+        cursor.execute('''
+            UPDATE articles 
+            SET url = ?,
+                topic = ?,
+                revision_count = ?,
+                revert_count = ?,
+                editor_count = ?,
+                conflict_score = ?,
+                last_updated = ?
+            WHERE title = ? AND wiki_lang = ?
+        ''', (
+            article_data['url'],
+            article_data.get('topic', ''),
+            article_data['revision_count'],
+            article_data['revert_count'],
+            article_data['editor_count'],
+            article_data['conflict_score'],
+            now,
+            article_data['title'],
+            article_data['wiki_lang']
+        ))
+        conn.commit()
+        conn.close()
+        return 'updated'
 
 
 def get_all_articles():
     """Gibt alle Artikel aus der Datenbank zurück."""
-    conn = sqlite3.connect(get_db_path())
-    conn.row_factory = sqlite3.Row
+    conn = get_connection()
     cursor = conn.cursor()
     
     cursor.execute('''
@@ -112,20 +167,25 @@ def get_all_articles():
         ORDER BY conflict_score DESC, last_updated DESC
     ''')
     
-    articles = [dict(row) for row in cursor.fetchall()]
+    rows = cursor.fetchall()
     conn.close()
-    return articles
+    
+    columns = ['id', 'title', 'wiki_lang', 'url', 'topic', 
+               'revision_count', 'revert_count', 'editor_count',
+               'conflict_score', 'first_seen', 'last_updated']
+    
+    return [dict(zip(columns, row)) for row in rows]
 
 
-def log_scan(scan_type, wiki_lang, articles_scanned, articles_added):
+def log_scan(scan_type, wiki_lang, articles_scanned, articles_added, articles_updated=0):
     """Protokolliert einen Scan-Durchlauf."""
-    conn = sqlite3.connect(get_db_path())
+    conn = get_connection()
     cursor = conn.cursor()
     
     cursor.execute('''
-        INSERT INTO scan_log (scan_type, wiki_lang, articles_scanned, articles_added)
-        VALUES (?, ?, ?, ?)
-    ''', (scan_type, wiki_lang, articles_scanned, articles_added))
+        INSERT INTO scan_log (scan_type, wiki_lang, articles_scanned, articles_added, articles_updated)
+        VALUES (?, ?, ?, ?, ?)
+    ''', (scan_type, wiki_lang, articles_scanned, articles_added, articles_updated))
     
     conn.commit()
     conn.close()
@@ -133,8 +193,7 @@ def log_scan(scan_type, wiki_lang, articles_scanned, articles_added):
 
 def get_scan_history(limit=20):
     """Gibt die letzten Scan-Durchläufe zurück."""
-    conn = sqlite3.connect(get_db_path())
-    conn.row_factory = sqlite3.Row
+    conn = get_connection()
     cursor = conn.cursor()
     
     cursor.execute('''
@@ -143,14 +202,18 @@ def get_scan_history(limit=20):
         LIMIT ?
     ''', (limit,))
     
-    history = [dict(row) for row in cursor.fetchall()]
+    rows = cursor.fetchall()
     conn.close()
-    return history
+    
+    columns = ['id', 'scan_type', 'wiki_lang', 'articles_scanned', 
+               'articles_added', 'articles_updated', 'timestamp']
+    
+    return [dict(zip(columns, row)) for row in rows]
 
 
 def delete_article(article_id):
     """Löscht einen Artikel aus der Datenbank."""
-    conn = sqlite3.connect(get_db_path())
+    conn = get_connection()
     cursor = conn.cursor()
     
     cursor.execute('DELETE FROM articles WHERE id = ?', (article_id,))
