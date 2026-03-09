@@ -3,25 +3,24 @@ Datenbank-Operationen für den Edit-War Scanner
 Mit Turso (Cloud SQLite) und Update-Logik
 """
 
-import libsql_experimental as libsql
+import libsql_client
 from datetime import datetime
 from config import TURSO_DATABASE_URL, TURSO_AUTH_TOKEN
 
 
 def get_connection():
     """Erstellt eine Verbindung zur Turso-Datenbank."""
-    return libsql.connect(
-        database=TURSO_DATABASE_URL,
+    return libsql_client.create_client_sync(
+        url=TURSO_DATABASE_URL,
         auth_token=TURSO_AUTH_TOKEN
     )
 
 
 def init_database():
     """Erstellt die Tabellen, falls nicht vorhanden."""
-    conn = get_connection()
-    cursor = conn.cursor()
+    client = get_connection()
     
-    cursor.execute('''
+    client.execute('''
         CREATE TABLE IF NOT EXISTS articles (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             title TEXT NOT NULL,
@@ -38,7 +37,7 @@ def init_database():
         )
     ''')
     
-    cursor.execute('''
+    client.execute('''
         CREATE TABLE IF NOT EXISTS scan_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             scan_type TEXT NOT NULL,
@@ -50,27 +49,25 @@ def init_database():
         )
     ''')
     
-    conn.commit()
-    conn.close()
+    client.close()
 
 
 def get_article(title, wiki_lang):
     """Holt einen Artikel aus der Datenbank, falls vorhanden."""
-    conn = get_connection()
-    cursor = conn.cursor()
+    client = get_connection()
     
-    cursor.execute(
+    result = client.execute(
         'SELECT * FROM articles WHERE title = ? AND wiki_lang = ?',
-        (title, wiki_lang)
+        [title, wiki_lang]
     )
-    row = cursor.fetchone()
-    conn.close()
     
-    if row:
+    client.close()
+    
+    if result.rows:
         columns = ['id', 'title', 'wiki_lang', 'url', 'topic', 
                    'revision_count', 'revert_count', 'editor_count',
                    'conflict_score', 'first_seen', 'last_updated']
-        return dict(zip(columns, row))
+        return dict(zip(columns, result.rows[0]))
     return None
 
 
@@ -80,7 +77,7 @@ def article_needs_update(existing, new_data):
     Update wenn: Edits ODER Reverts ODER Editoren sich geändert haben.
     """
     if existing is None:
-        return True  # Neuer Artikel
+        return True
     
     return (
         existing['revision_count'] != new_data['revision_count'] or
@@ -103,18 +100,17 @@ def add_or_update_article(article_data):
     if not article_needs_update(existing, article_data):
         return 'unchanged'
     
-    conn = get_connection()
-    cursor = conn.cursor()
+    client = get_connection()
     now = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
     
     if existing is None:
         # Neuer Artikel
-        cursor.execute('''
+        client.execute('''
             INSERT INTO articles 
             (title, wiki_lang, url, topic, revision_count, revert_count, 
              editor_count, conflict_score, first_seen, last_updated)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (
+        ''', [
             article_data['title'],
             article_data['wiki_lang'],
             article_data['url'],
@@ -125,13 +121,12 @@ def add_or_update_article(article_data):
             article_data['conflict_score'],
             now,
             now
-        ))
-        conn.commit()
-        conn.close()
+        ])
+        client.close()
         return 'added'
     else:
         # Artikel aktualisieren
-        cursor.execute('''
+        client.execute('''
             UPDATE articles 
             SET url = ?,
                 topic = ?,
@@ -141,7 +136,7 @@ def add_or_update_article(article_data):
                 conflict_score = ?,
                 last_updated = ?
             WHERE title = ? AND wiki_lang = ?
-        ''', (
+        ''', [
             article_data['url'],
             article_data.get('topic', ''),
             article_data['revision_count'],
@@ -151,72 +146,63 @@ def add_or_update_article(article_data):
             now,
             article_data['title'],
             article_data['wiki_lang']
-        ))
-        conn.commit()
-        conn.close()
+        ])
+        client.close()
         return 'updated'
 
 
 def get_all_articles():
     """Gibt alle Artikel aus der Datenbank zurück."""
-    conn = get_connection()
-    cursor = conn.cursor()
+    client = get_connection()
     
-    cursor.execute('''
+    result = client.execute('''
         SELECT * FROM articles 
         ORDER BY conflict_score DESC, last_updated DESC
     ''')
     
-    rows = cursor.fetchall()
-    conn.close()
+    client.close()
     
     columns = ['id', 'title', 'wiki_lang', 'url', 'topic', 
                'revision_count', 'revert_count', 'editor_count',
                'conflict_score', 'first_seen', 'last_updated']
     
-    return [dict(zip(columns, row)) for row in rows]
+    return [dict(zip(columns, row)) for row in result.rows]
 
 
 def log_scan(scan_type, wiki_lang, articles_scanned, articles_added, articles_updated=0):
     """Protokolliert einen Scan-Durchlauf."""
-    conn = get_connection()
-    cursor = conn.cursor()
+    client = get_connection()
     
-    cursor.execute('''
+    client.execute('''
         INSERT INTO scan_log (scan_type, wiki_lang, articles_scanned, articles_added, articles_updated)
         VALUES (?, ?, ?, ?, ?)
-    ''', (scan_type, wiki_lang, articles_scanned, articles_added, articles_updated))
+    ''', [scan_type, wiki_lang, articles_scanned, articles_added, articles_updated])
     
-    conn.commit()
-    conn.close()
+    client.close()
 
 
 def get_scan_history(limit=20):
     """Gibt die letzten Scan-Durchläufe zurück."""
-    conn = get_connection()
-    cursor = conn.cursor()
+    client = get_connection()
     
-    cursor.execute('''
+    result = client.execute('''
         SELECT * FROM scan_log 
         ORDER BY timestamp DESC 
         LIMIT ?
-    ''', (limit,))
+    ''', [limit])
     
-    rows = cursor.fetchall()
-    conn.close()
+    client.close()
     
     columns = ['id', 'scan_type', 'wiki_lang', 'articles_scanned', 
                'articles_added', 'articles_updated', 'timestamp']
     
-    return [dict(zip(columns, row)) for row in rows]
+    return [dict(zip(columns, row)) for row in result.rows]
 
 
 def delete_article(article_id):
     """Löscht einen Artikel aus der Datenbank."""
-    conn = get_connection()
-    cursor = conn.cursor()
+    client = get_connection()
     
-    cursor.execute('DELETE FROM articles WHERE id = ?', (article_id,))
+    client.execute('DELETE FROM articles WHERE id = ?', [article_id])
     
-    conn.commit()
-    conn.close()
+    client.close()
