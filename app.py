@@ -112,26 +112,17 @@ HTML_TEMPLATE = '''
         .stat-label { font-size: 12px; color: #666; }
         a { color: #0066cc; }
         .loading { opacity: 0.6; pointer-events: none; }
-        .badge {
-            display: inline-block;
-            padding: 2px 8px;
-            border-radius: 10px;
-            font-size: 11px;
-            margin-left: 5px;
-        }
-        .badge-new { background: #d4edda; color: #155724; }
-        .badge-updated { background: #fff3cd; color: #856404; }
     </style>
 </head>
 <body>
-    <h1>🔍 Wikipedia Edit-War Scanner</h1>
+    <h1>Wikipedia Edit-War Scanner</h1>
     
     {% if message %}
     <div class="message message-{{ message_type }}">{{ message }}</div>
     {% endif %}
     
     <div class="card">
-        <h2>📊 Übersicht</h2>
+        <h2>Uebersicht</h2>
         <div class="stats">
             <div class="stat">
                 <div class="stat-number">{{ stats.total_articles }}</div>
@@ -149,8 +140,8 @@ HTML_TEMPLATE = '''
     </div>
     
     <div class="card">
-        <h2>🔄 Automatischer Scan</h2>
-        <p>Scannt die letzten 48 Stunden nach Artikeln mit hoher Bearbeitungsaktivität.</p>
+        <h2>Automatischer Scan</h2>
+        <p>Scannt die letzten 48 Stunden nach Artikeln mit hoher Bearbeitungsaktivitaet.</p>
         <form method="post" action="/scan" onsubmit="this.classList.add('loading')">
             <select name="wiki_lang">
                 <option value="both">Beide (DE + EN)</option>
@@ -159,11 +150,11 @@ HTML_TEMPLATE = '''
             </select>
             <button type="submit" class="btn">Scan starten ({{ scan_limit }} Artikel)</button>
         </form>
-        <p><small>⚠️ Der Scan kann 1-2 Minuten dauern. Bestehende Artikel werden bei Änderungen aktualisiert.</small></p>
+        <p><small>Der Scan kann 1-2 Minuten dauern. Bestehende Artikel werden bei Aenderungen aktualisiert.</small></p>
     </div>
     
     <div class="card">
-        <h2>🔎 Manuelle Suche</h2>
+        <h2>Manuelle Suche</h2>
         <p>Suche nach einem bestimmten Artikel oder Thema zur Analyse.</p>
         <form method="post" action="/search" onsubmit="this.classList.add('loading')">
             <input type="text" name="search_term" placeholder="Artikelname oder Thema..." required>
@@ -171,13 +162,13 @@ HTML_TEMPLATE = '''
                 <option value="de">Deutsch</option>
                 <option value="en">Englisch</option>
             </select>
-            <button type="submit" class="btn">Suchen & Analysieren</button>
+            <button type="submit" class="btn">Suchen und Analysieren</button>
         </form>
     </div>
     
     <div class="card">
-        <h2>📋 Gefundene Artikel</h2>
-        <a href="/export" class="btn btn-success">📥 Excel-Export (CSV)</a>
+        <h2>Gefundene Artikel</h2>
+        <a href="/export" class="btn btn-success">Excel-Export (CSV)</a>
         
         {% if articles %}
         <table>
@@ -204,14 +195,14 @@ HTML_TEMPLATE = '''
                     <td>{{ article.revert_count }}</td>
                     <td>{{ article.editor_count }}</td>
                     <td>
-                        <span class="score {% if article.conflict_score >= 8 %}score-high{% elif article.conflict_score >= 5 %}score-medium{% else %}score-low{% endif %}">
+                        <span class="score {% if article.conflict_score|int >= 8 %}score-high{% elif article.conflict_score|int >= 5 %}score-medium{% else %}score-low{% endif %}">
                             {{ article.conflict_score }}/10
                         </span>
                     </td>
-                    <td>{{ article.last_updated[:16] }}</td>
+                    <td>{{ article.last_updated[:16] if article.last_updated else '' }}</td>
                     <td>
                         <form method="post" action="/delete/{{ article.id }}" style="display:inline;">
-                            <button type="submit" class="btn btn-danger" style="padding:5px 10px;">🗑️</button>
+                            <button type="submit" class="btn btn-danger" style="padding:5px 10px;">X</button>
                         </form>
                     </td>
                 </tr>
@@ -224,7 +215,7 @@ HTML_TEMPLATE = '''
     </div>
     
     <div class="card">
-        <h2>📜 Scan-Historie</h2>
+        <h2>Scan-Historie</h2>
         {% if scan_history %}
         <table>
             <thead>
@@ -251,7 +242,7 @@ HTML_TEMPLATE = '''
             </tbody>
         </table>
         {% else %}
-        <p>Noch keine Scans durchgeführt.</p>
+        <p>Noch keine Scans durchgefuehrt.</p>
         {% endif %}
     </div>
     
@@ -261,13 +252,13 @@ HTML_TEMPLATE = '''
 
 
 def get_stats():
-    """Berechnet Statistiken für das Dashboard."""
+    """Berechnet Statistiken fuer das Dashboard."""
     articles = get_all_articles()
     history = get_scan_history(1)
     
     return {
         'total_articles': len(articles),
-        'high_conflict': len([a for a in articles if a['conflict_score'] >= 8]),
+        'high_conflict': len([a for a in articles if int(a['conflict_score'] or 0) >= 8]),
         'last_scan': history[0]['timestamp'][:16] if history else 'Noch nie'
     }
 
@@ -297,7 +288,7 @@ def index():
 
 @app.route('/scan', methods=['POST'])
 def run_scan():
-    """Führt einen manuellen Scan durch."""
+    """Fuehrt einen manuellen Scan durch."""
     wiki_lang = request.form.get('wiki_lang', 'both')
     
     languages = ['de', 'en'] if wiki_lang == 'both' else [wiki_lang]
@@ -348,7 +339,7 @@ def search():
     results = search_article(wiki_lang, search_term)
     
     if not results:
-        return redirect(url_for('index', message=f'Keine Artikel gefunden für "{search_term}".', type='error'))
+        return redirect(url_for('index', message=f'Keine Artikel gefunden fuer "{search_term}".', type='error'))
     
     added = 0
     updated = 0
@@ -390,12 +381,11 @@ def export():
 
 @app.route('/delete/<int:article_id>', methods=['POST'])
 def delete(article_id):
-    """Löscht einen Artikel aus der Datenbank."""
+    """Loescht einen Artikel aus der Datenbank."""
     delete_article(article_id)
-    return redirect(url_for('index', message='Artikel gelöscht.', type='info'))
+    return redirect(url_for('index', message='Artikel geloescht.', type='info'))
 
 
-# Endpoint für Cron-Job (automatischer Scan)
 @app.route('/cron/scan')
 def cron_scan():
     """Wird vom Render Cron-Job aufgerufen."""
